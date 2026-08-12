@@ -628,16 +628,6 @@ with st.sidebar:
             st.session_state.portfolio.pop(idx)
             save_portfolio_data(st.session_state.portfolio)
             st.rerun()
-            
-    # 사이드바 하단 면책 조항
-    st.markdown("---")
-    with st.expander("⚠️ 투자 유의사항 (Disclaimer)"):
-        st.caption(
-            "본 대시보드(StockCast)에서 제공하는 감성 지수 및 내일의 주가 상승 확률은 "
-            "AI가 뉴스와 공시를 퀀트 기법으로 정규화하여 산출한 **추세적 참고 정보**입니다.\n\n"
-            "**절대적인 투자 지표가 아니며**, 돌발 변수에 따라 언제든 달라질 수 있습니다. "
-            "투자 의사결정의 보조 도구로만 활용하시기 바라며, 최종 투자의 책임은 본인에게 있습니다."
-        )
 
 
 # --- 데이터 분석 파이프라인 ---
@@ -645,8 +635,8 @@ analyzed_stocks = []
 total_eval_amount_krw = 0
 
 if st.session_state.portfolio:
-    # 🔥 수정사항: 스피너 텍스트에 새로운 안내 문구 추가
-    with st.spinner("🌍 글로벌 데이터를 분석 중입니다... (※ 최신 정보 갱신은 좌측의 '재분석' 버튼을 클릭해주세요. | ※ 하단의 [설정 저장&반영] 버튼을 눌러야 내 보유 종목이 업데이트됩니다. | ※ 본 예측은 참고용이며 최종 투자 책임은 본인에게 있습니다.)"):
+    # 🔥 수정 1: 스피너 멘트를 간결하게 축소
+    with st.spinner("🌍 데이터를 분석 중입니다... (※ 본 예측은 참고용이며 최종 투자 책임은 본인에게 있습니다.)"):
         for item in st.session_state.portfolio:
             name = item.get("name", "")
             code = item.get("code", "")
@@ -796,6 +786,14 @@ if st.session_state.portfolio:
 
         st.markdown("---")
         submitted = st.form_submit_button("💾 설정 저장 & 반영", use_container_width=True, type="primary")
+        
+        # 🔥 수정 2: 하단 버튼 바로 아래에 어두운 글씨(캡션)로 주의사항 3가지 깔끔하게 추가
+        st.caption(
+            "※ 최신 정보 갱신은 좌측의 '재분석' 버튼을 클릭해 주세요.  \n"
+            "※ 하단의 [설정 저장 & 반영] 버튼을 눌러야 내 보유 종목이 업데이트됩니다.  \n"
+            "※ 본 예측은 참고용이며 최종 투자 책임은 본인에게 있습니다."
+        )
+        
         if submitted:
             has_changed = False
             for idx, chg in form_inputs.items():
