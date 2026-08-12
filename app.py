@@ -71,7 +71,6 @@ def save_portfolio_data(data: list):
     storage.set("portfolio", json.dumps(data, ensure_ascii=False))
     st.session_state.is_loaded_from_browser = True
 
-# 분석 데이터는 API 절약을 위해 서버 공통 캐시 유지
 def load_analysis_cache() -> dict:
     if os.path.exists(CACHE_FILE):
         try:
@@ -404,7 +403,7 @@ def fetch_us_sources(ticker: str, company_name: str = "") -> tuple[list, float]:
 
 
 # ==========================================
-# 7. Gemini 분석, 예측 및 수학적 통일 엔진
+# 7. Gemini 분석, 예측 및 수학적 통일 엔진 (예외 처리 강화)
 # ==========================================
 def analyze_stock_universal(stock_name: str, stock_code: str, market: str, force_refresh: bool = False) -> dict:
     cache = load_analysis_cache()
@@ -461,12 +460,16 @@ def analyze_stock_universal(stock_name: str, stock_code: str, market: str, force
             if response and response.text:
                 break
         except errors.ClientError as e:
-            if "429" in str(e):
+            # 💡 429(속도 제한) 또는 503(서버 과부하) 발생 시 우아하게 대처
+            if "429" in str(e) or "503" in str(e):
                 time.sleep(2)
                 continue
             else:
-                raise e
+                break
+        except Exception:
+            continue
 
+    # 🚨 API 호출 실패 또는 쿼터 초과 시 사용자 친화적인 안내 반환
     if not response or not response.text:
         return {
             "stock_name": stock_name,
@@ -475,16 +478,34 @@ def analyze_stock_universal(stock_name: str, stock_code: str, market: str, force
             "weather": "⛅ 구름조금",
             "bullish_pct": 50,
             "bearish_pct": 50,
-            "confidence": "대기중",
-            "summary": "API 호출 제한으로 잠시 후 새로고침 시 분석이 완료됩니다.",
+            "confidence": "안내",
+            "summary": "현재 접속량이 많아 AI 분석이 잠시 지연되고 있습니다. 잠시 후 새로고침 또는 '재분석' 버튼을 눌러주세요.",
             "upward_prob": 50,
-            "forecast_comment": "데이터 수집 대기 중입니다.",
-            "reasons": [],
+            "forecast_comment": "일시적인 요청 제한(쿼터) 또는 네트워크 지연 상태입니다. 1분 뒤에 다시 시도해 주세요.",
+            "reasons": [{
+                "type": "bullish",
+                "source_tier": "[시스템 안내]",
+                "tag": "[시황]",
+                "text": "트래픽 초과로 임시 중립 지수가 적용되었습니다.",
+                "weight": "+20%",
+                "source_url": "#"
+            }],
             "current_price": current_price,
             "current_price_usd": current_price_usd,
         }
 
-    raw_json = json.loads(response.text)
+    try:
+        raw_json = json.loads(response.text)
+    except Exception:
+        raw_json = {
+            "stock_name": stock_name,
+            "stock_code": stock_code,
+            "confidence": "보통",
+            "summary": "데이터 파싱 중 오류가 발생했으나 기본 지표로 대체되었습니다.",
+            "upward_prob": 50,
+            "forecast_comment": "정상적인 분석 데이터 수신 대기 중입니다.",
+            "reasons": []
+        }
     
     bullish_sum = 0
     bearish_sum = 0
@@ -492,7 +513,7 @@ def analyze_stock_universal(stock_name: str, stock_code: str, market: str, force
 
     for r in raw_json.get("reasons", []):
         score = abs(r.get("weight_score", 20))
-        if r["type"] == "bullish":
+        if r.get("type", "bullish") == "bullish":
             bullish_sum += score
             sign = "+"
         else:
@@ -500,12 +521,12 @@ def analyze_stock_universal(stock_name: str, stock_code: str, market: str, force
             sign = "-"
         
         formatted_reasons.append({
-            "type": r["type"],
-            "source_tier": r["source_tier"],
-            "tag": r["tag"],
-            "text": r["text"],
+            "type": r.get("type", "bullish"),
+            "source_tier": r.get("source_tier", "[공시/뉴스]"),
+            "tag": r.get("tag", "[시황]"),
+            "text": r.get("text", "요약 정보 없음"),
             "weight": f"{sign}{score}%",
-            "source_url": r["source_url"],
+            "source_url": r.get("source_url", "#"),
         })
 
     total_score = bullish_sum + bearish_sum
@@ -525,14 +546,14 @@ def analyze_stock_universal(stock_name: str, stock_code: str, market: str, force
         weather = "🌧️ 비"
 
     res_json = {
-        "stock_name": raw_json["stock_name"],
-        "stock_code": raw_json["stock_code"],
+        "stock_name": raw_json.get("stock_name", stock_name),
+        "stock_code": raw_json.get("stock_code", stock_code),
         "market": market,
         "weather": weather,
         "bullish_pct": bullish_pct,
         "bearish_pct": bearish_pct,
-        "confidence": raw_json["confidence"],
-        "summary": raw_json["summary"],
+        "confidence": raw_json.get("confidence", "보통"),
+        "summary": raw_json.get("summary", ""),
         "upward_prob": raw_json.get("upward_prob", 50),
         "forecast_comment": raw_json.get("forecast_comment", ""),
         "reasons": formatted_reasons,
@@ -548,7 +569,6 @@ def analyze_stock_universal(stock_name: str, stock_code: str, market: str, force
 # ==========================================
 # 8. Streamlit UI 대시보드
 # ==========================================
-# 타이틀
 st.title("🌦️ StockCast (스톡캐스트)")
 st.caption("글로벌 감성 지수 분석 및 다음 날 주가 추세 예측 시스템")
 
@@ -582,6 +602,7 @@ with st.sidebar:
                         "quantity": 0,
                     })
                     save_portfolio_data(st.session_state.portfolio)
+                    st.toast("종목이 추가되었습니다! 아래에서 설정을 저장해 주세요.", icon="✅")
                     st.rerun()
 
     with search_tab_us:
@@ -605,6 +626,7 @@ with st.sidebar:
                             "quantity": 0,
                         })
                         save_portfolio_data(st.session_state.portfolio)
+                        st.toast("종목이 추가되었습니다! 아래에서 설정을 저장해 주세요.", icon="✅")
                         st.rerun()
 
     st.markdown("---")
@@ -627,6 +649,7 @@ with st.sidebar:
         if c_del.button("❌", key=f"del_{idx}"):
             st.session_state.portfolio.pop(idx)
             save_portfolio_data(st.session_state.portfolio)
+            st.toast("종목이 삭제되었습니다.", icon="🗑️")
             st.rerun()
 
 
@@ -635,32 +658,34 @@ analyzed_stocks = []
 total_eval_amount_krw = 0
 
 if st.session_state.portfolio:
-    # 🔥 수정 1: 스피너 멘트를 간결하게 축소
     with st.spinner("🌍 데이터를 분석 중입니다... (※ 본 예측은 참고용이며 최종 투자 책임은 본인에게 있습니다.)"):
-        for item in st.session_state.portfolio:
-            name = item.get("name", "")
-            code = item.get("code", "")
-            market = item.get("market", "KR")
-            is_holding = item.get("is_holding", False)
-            qty = item.get("quantity", 0)
+        try:
+            for item in st.session_state.portfolio:
+                name = item.get("name", "")
+                code = item.get("code", "")
+                market = item.get("market", "KR")
+                is_holding = item.get("is_holding", False)
+                qty = item.get("quantity", 0)
 
-            analysis = analyze_stock_universal(name, code, market)
-            
-            if market == "KR":
-                p_krw = analysis.get("current_price", 0)
-                eval_amount_krw = p_krw * qty if is_holding else 0
-            else:
-                p_usd = analysis.get("current_price_usd", 0.0)
-                eval_amount_krw = int(p_usd * qty * usd_rate) if is_holding else 0
+                analysis = analyze_stock_universal(name, code, market)
+                
+                if market == "KR":
+                    p_krw = analysis.get("current_price", 0)
+                    eval_amount_krw = p_krw * qty if is_holding else 0
+                else:
+                    p_usd = analysis.get("current_price_usd", 0.0)
+                    eval_amount_krw = int(p_usd * qty * usd_rate) if is_holding else 0
 
-            analysis["is_holding"] = is_holding
-            analysis["quantity"] = qty
-            analysis["eval_amount_krw"] = eval_amount_krw
-            analysis["market"] = market
+                analysis["is_holding"] = is_holding
+                analysis["quantity"] = qty
+                analysis["eval_amount_krw"] = eval_amount_krw
+                analysis["market"] = market
 
-            analyzed_stocks.append(analysis)
-            if is_holding and qty > 0:
-                total_eval_amount_krw += eval_amount_krw
+                analyzed_stocks.append(analysis)
+                if is_holding and qty > 0:
+                    total_eval_amount_krw += eval_amount_krw
+        except Exception:
+            st.warning("⚠️ 일시적인 데이터 수신 지연이 발생했습니다. 좌측의 [재분석] 버튼을 눌러주세요.")
 
 weighted_bullish = 0.0
 holding_stocks = [s for s in analyzed_stocks if s.get("is_holding") and s.get("quantity", 0) > 0]
@@ -764,10 +789,10 @@ if st.session_state.portfolio:
                 with st.expander("🔍 세부 분석 요인 및 원문 링크"):
                     st.caption(f"신뢰도 수준: **{stock.get('confidence', '보통')}**")
                     for r in stock.get("reasons", []):
-                        icon = "🟢" if r["type"] == "bullish" else "🔴"
+                        icon = "🟢" if r.get("type") == "bullish" else "🔴"
                         tier_badge = r.get("source_tier", "")
-                        st.markdown(f"{icon} `{tier_badge}` **{r['tag']}** {r['text']} `({r['weight']})`")
-                        st.caption(f"🔗 [원문 기사/공시 바로가기]({r['source_url']})")
+                        st.markdown(f"{icon} `{tier_badge}` **{r.get('tag', '')}** {r.get('text', '')} `({r.get('weight', '')})`")
+                        st.caption(f"🔗 [원문 기사/공시 바로가기]({r.get('source_url', '#')})")
 
         st.subheader("📦 내 보유 종목")
         if holding_stocks:
@@ -787,7 +812,6 @@ if st.session_state.portfolio:
         st.markdown("---")
         submitted = st.form_submit_button("💾 설정 저장 & 반영", use_container_width=True, type="primary")
         
-        # 🔥 수정 2: 하단 버튼 바로 아래에 어두운 글씨(캡션)로 주의사항 3가지 깔끔하게 추가
         st.caption(
             "※ 최신 정보 갱신은 좌측의 '재분석' 버튼을 클릭해 주세요.  \n"
             "※ 하단의 [설정 저장 & 반영] 버튼을 눌러야 내 보유 종목이 업데이트됩니다.  \n"
