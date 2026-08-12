@@ -645,7 +645,8 @@ analyzed_stocks = []
 total_eval_amount_krw = 0
 
 if st.session_state.portfolio:
-    with st.spinner("🌍 글로벌 데이터를 분석 중입니다... (💡 최신 정보 갱신은 좌측 '재분석' 버튼 클릭 | ※ 예측은 보조 참고용입니다)"):
+    # 🔥 수정사항: 스피너 텍스트에 새로운 안내 문구 추가
+    with st.spinner("🌍 글로벌 데이터를 분석 중입니다... (※ 최신 정보 갱신은 좌측의 '재분석' 버튼을 클릭해주세요. | ※ 하단의 [설정 저장&반영] 버튼을 눌러야 내 보유 종목이 업데이트됩니다. | ※ 본 예측은 참고용이며 최종 투자 책임은 본인에게 있습니다.)"):
         for item in st.session_state.portfolio:
             name = item.get("name", "")
             code = item.get("code", "")
