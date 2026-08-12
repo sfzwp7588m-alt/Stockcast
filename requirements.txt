@@ -4,3 +4,4 @@ pydantic
 requests
 beautifulsoup4
 yfinance
+streamlit-browser-storage
