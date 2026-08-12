@@ -14,7 +14,16 @@ from google.genai import types
 from pydantic import BaseModel, Field
 import requests
 import streamlit as st
+from streamlit_browser_storage import LocalStorage
 import yfinance as yf
+
+# 🚨 페이지 설정은 반드시 최상단에 위치해야 합니다.
+st.set_page_config(
+    page_title="StockCast | 주식 기상청", page_icon="🌦️", layout="wide"
+)
+
+# 사용자 개인 브라우저 로컬 스토리지 연동
+storage = LocalStorage(key="stockcast_db")
 
 # ==========================================
 # 1. Pydantic 구조화 출력 스키마
@@ -29,7 +38,6 @@ class StockReason(BaseModel):
     weight_score: int = Field(description="영향도 절대점수 (10 ~ 50 사이의 정수)")
     source_url: str = Field(description="기사 또는 공시의 실제 웹 링크")
 
-
 class StockAnalysisRawResponse(BaseModel):
     stock_name: str
     stock_code: str
@@ -41,31 +49,29 @@ class StockAnalysisRawResponse(BaseModel):
 
 
 # ==========================================
-# 2. 데이터 영구 저장 및 캐시 관리
+# 2. 개인 로컬 스토리지 & 서버 공통 캐시 관리
 # ==========================================
-DATA_FILE = "portfolio_data.json"
 CACHE_FILE = "analysis_cache.json"
 
+# 포트폴리오 로딩 (브라우저 스토리지에서 읽어오기)
+if "portfolio" not in st.session_state:
+    st.session_state.portfolio = []
+    st.session_state.is_loaded_from_browser = False
 
-def load_portfolio_data() -> list:
-    if os.path.exists(DATA_FILE):
+if not st.session_state.is_loaded_from_browser:
+    saved_data = storage.get("portfolio")
+    if saved_data is not None:
         try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                for item in data:
-                    if "code" not in item: item["code"] = ""
-                    if "market" not in item: item["market"] = "KR"
-                return data
+            st.session_state.portfolio = json.loads(saved_data)
         except Exception:
-            return []
-    return []
-
+            st.session_state.portfolio = []
+        st.session_state.is_loaded_from_browser = True
 
 def save_portfolio_data(data: list):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    storage.set("portfolio", json.dumps(data, ensure_ascii=False))
+    st.session_state.is_loaded_from_browser = True
 
-
+# 분석 데이터는 API 절약을 위해 서버 공통 캐시 유지
 def load_analysis_cache() -> dict:
     if os.path.exists(CACHE_FILE):
         try:
@@ -75,11 +81,9 @@ def load_analysis_cache() -> dict:
             return {}
     return {}
 
-
 def save_analysis_cache(cache: dict):
     with open(CACHE_FILE, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
-
 
 def clear_analysis_cache():
     if os.path.exists(CACHE_FILE):
@@ -87,17 +91,15 @@ def clear_analysis_cache():
 
 
 # ==========================================
-# 3. 🚨 API 및 공통 헤더 설정 (st.secrets 적용)
+# 3. API 및 공통 헤더 설정 (st.secrets 적용)
 # ==========================================
-# 주의: 이 파일에는 실제 API 키가 절대 적혀있으면 안 됩니다.
 try:
     DART_API_KEY = st.secrets["DART_API_KEY"]
     NAVER_CLIENT_ID = st.secrets["NAVER_CLIENT_ID"]
     NAVER_CLIENT_SECRET = st.secrets["NAVER_CLIENT_SECRET"]
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 except FileNotFoundError:
-    # 로컬 테스트 시 secrets.toml 파일이 없을 때 대비용 에러 메시지
-    st.error("API 키를 찾을 수 없습니다. '.streamlit/secrets.toml' 파일이 올바르게 설정되었는지 확인하세요.")
+    st.error("API 키를 찾을 수 없습니다. '.streamlit/secrets.toml' 파일 설정을 확인하세요.")
     st.stop()
 
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -108,10 +110,8 @@ SEC_HEADERS = {
     "Accept-Encoding": "gzip, deflate",
 }
 
-
 def clean_html(text: str) -> str:
     return html.unescape(re.sub(r"<.*?>", "", text))
-
 
 def calculate_time_weight(pub_date: datetime, is_fundamental: bool = False) -> tuple[int, str]:
     now = datetime.now()
@@ -143,7 +143,6 @@ def get_usd_krw_rate() -> float:
         pass
     return 1380.0
 
-
 @st.cache_data(ttl=86400)
 def load_all_krx_stocks() -> dict:
     stocks = {}
@@ -169,7 +168,6 @@ def load_all_krx_stocks() -> dict:
             except Exception:
                 continue
     return stocks
-
 
 def search_us_stocks_live(query_text: str) -> list[dict]:
     if not query_text or len(query_text.strip()) < 1:
@@ -211,7 +209,6 @@ def get_kr_current_price(stock_code: str) -> int:
     except Exception:
         pass
     return 0
-
 
 def fetch_kr_sources(stock_name: str, stock_code: str) -> list:
     all_data = []
@@ -311,7 +308,6 @@ def get_sec_cik(ticker: str) -> str:
         pass
     return ""
 
-
 def fetch_finviz_us_news(ticker: str) -> list:
     news_items = []
     url = f"https://finviz.com/quote.ashx?t={ticker}&p=d"
@@ -350,7 +346,6 @@ def fetch_finviz_us_news(ticker: str) -> list:
     except Exception:
         pass
     return news_items
-
 
 def fetch_us_sources(ticker: str, company_name: str = "") -> tuple[list, float]:
     all_data = []
@@ -553,16 +548,9 @@ def analyze_stock_universal(stock_name: str, stock_code: str, market: str, force
 # ==========================================
 # 8. Streamlit UI 대시보드
 # ==========================================
-st.set_page_config(
-    page_title="StockCast | 주식 기상청", page_icon="🌦️", layout="wide"
-)
-
 # 타이틀
 st.title("🌦️ StockCast (스톡캐스트)")
 st.caption("글로벌 감성 지수 분석 및 다음 날 주가 추세 예측 시스템")
-
-if "portfolio" not in st.session_state:
-    st.session_state.portfolio = load_portfolio_data()
 
 usd_rate = get_usd_krw_rate()
 krx_map = load_all_krx_stocks()
@@ -657,7 +645,7 @@ analyzed_stocks = []
 total_eval_amount_krw = 0
 
 if st.session_state.portfolio:
-    with st.spinner("🌍 글로벌 데이터를 분석 중입니다... (※ 최신 정보 갱신은 좌측의 '재분석' 버튼을 클릭해주세요. | ※ 본 예측은 참고용이며 최종 투자 책임은 본인에게 있습니다.)"):
+    with st.spinner("🌍 글로벌 데이터를 분석 중입니다... (💡 최신 정보 갱신은 좌측 '재분석' 버튼 클릭 | ※ 예측은 보조 참고용입니다)"):
         for item in st.session_state.portfolio:
             name = item.get("name", "")
             code = item.get("code", "")
