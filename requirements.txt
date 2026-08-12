@@ -1,0 +1,6 @@
+streamlit
+google-genai
+pydantic
+requests
+beautifulsoup4
+yfinance
